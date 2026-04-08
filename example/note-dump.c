@@ -64,7 +64,7 @@ static void parse_and_dump(struct midi_parser *parser)
       break;
 
     case MIDI_PARSER_HEADER:
-      puts("struct note_t {\n    int freq;\n    int time;\n};\nstruct note_t music[] = {\n");
+      puts("#include \"music.h\"\n\nstruct note_t music[] = {");
       division = parser->header.time_division;
       break;
 
@@ -131,7 +131,7 @@ static void parse_and_dump(struct midi_parser *parser)
             printf("{0, %d},\n", duration_ms);
         }
       }
-      puts("};\n");
+      puts("};\nconst int music_length = sizeof(music) / sizeof(struct note_t);");
       return;
 
 
