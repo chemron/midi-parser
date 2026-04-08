@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <math.h>
 
 #include <sys/mman.h>
 
@@ -32,13 +33,17 @@ int get_duration_ms(long ticks) {
     return (int)(ms / 1000);
 }
 
+int get_midi_freq(int note) {
+    return (int)(440.0 * pow(2.0, (note - 69) / 12.0));
+}
+
 static void parse_and_dump(struct midi_parser *parser)
 {
   enum midi_parser_status status;
   int active_notes[128] = {0};
   int current_note = -1;
   int new_note = -1;
-  int duration;
+  long duration;
   long current_time = 0;
   long last_time = 0;
 
@@ -73,6 +78,11 @@ static void parse_and_dump(struct midi_parser *parser)
       vel = parser->midi.param2;
 
       current_time += vtime;
+
+      if (channel == 9) {
+        break; // skip drums
+      }
+
       if (midi_status == MIDI_STATUS_NOTE_ON) {
         if (vel > 0) {
           active_notes[note] = 1;
@@ -88,30 +98,36 @@ static void parse_and_dump(struct midi_parser *parser)
       new_note = get_highest_note(active_notes);
 
       if (new_note != current_note) {
-        duration = last_time - current_time;
-        if (duration > 0) {
-          int duration_ms = get_duration_ms(duration);
-          if (current_note != -1) {
-            int freq = get_midi_freq(current_note);
-            printf("{%d, %d},\n", freq, duration_ms);
+          duration = current_time - last_time;
+
+          if (duration > 0) {
+              int duration_ms = get_duration_ms(duration);
+
+              if (duration_ms >= 20) {
+                  if (current_note != -1) {
+                      int freq = get_midi_freq(current_note);
+                      printf("{%d, %d},\n", freq, duration_ms);
+                  } else {
+                      printf("{0, %d},\n", duration_ms);
+                  }
+              }
           }
-          else {
-            // rest
-            printf("{%d, %d},\n", 0, duration_ms);
-          }
-        }
-        last_time = current_time;
-        current_note = new_note;
+
+          last_time = current_time;
+          current_note = new_note;
       }
       break;
 
     case MIDI_PARSER_EOB:
-      duration = last_time - current_time;
+      duration = current_time - last_time;
       if (duration > 0) {
         int duration_ms = get_duration_ms(duration);
         if (current_note != -1) {
           int freq = get_midi_freq(current_note);
           printf("{%d, %d},\n", freq, duration_ms);
+        }
+        else {
+            printf("{0, %d},\n", duration_ms);
         }
       }
       return;
