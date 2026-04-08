@@ -9,22 +9,48 @@
 
 #include <midi-parser.h>
 
+long tempo = 500000;   // default = 120 BPM
+int division = 480;    // will be set from header
+
 static void usage(const char *prog)
 {
   printf("usage: %s <file.midi>\n", prog);
 }
 
+int get_highest_note(int active_notes[128]) {
+  int i;
+  for (i = 127; i >=0; i--) {
+    if (active_notes[i]) {
+        return i;
+    }
+  }
+  return -1;
+}
+
+int get_duration_ms(long ticks) {
+    long ms = (ticks * tempo) / division;
+    return (int)(ms / 1000);
+}
+
 static void parse_and_dump(struct midi_parser *parser)
 {
   enum midi_parser_status status;
+  int active_notes[128] = {0};
+  int current_note = -1;
+  int new_note = -1;
+  int duration;
+  long current_time = 0;
+  long last_time = 0;
+
+  int vtime;
+  int midi_status;
+  int channel;
+  int note;
+  int vel;
 
   while (1) {
     status = midi_parse(parser);
     switch (status) {
-    case MIDI_PARSER_EOB:
-      puts("};");
-      return;
-
     case MIDI_PARSER_ERROR:
       puts("error");
       return;
@@ -33,22 +59,71 @@ static void parse_and_dump(struct midi_parser *parser)
       break;
 
     case MIDI_PARSER_HEADER:
-      puts("{");
+      division = parser->header.time_division;
       break;
 
     case MIDI_PARSER_TRACK:
       break;
 
     case MIDI_PARSER_TRACK_MIDI:
-      puts("track-midi");
-      printf("  time: %ld\n", parser->vtime);
-      printf("  status: %d [%s]\n", parser->midi.status, midi_status_name(parser->midi.status));
-      printf("  channel: %d\n", parser->midi.channel);
-      printf("  param1: %d\n", parser->midi.param1);
-      printf("  param2: %d\n", parser->midi.param2);
+      vtime = parser->vtime;
+      midi_status = parser->midi.status;
+      channel = parser->midi.channel;
+      note = parser->midi.param1;
+      vel = parser->midi.param2;
+
+      current_time += vtime;
+      if (midi_status == MIDI_STATUS_NOTE_ON) {
+        if (vel > 0) {
+          active_notes[note] = 1;
+        }
+        else {
+          active_notes[note] = 0;
+        }
+      }
+      else if (midi_status == MIDI_STATUS_NOTE_OFF) {
+        active_notes[note] = 0;
+      }
+
+      new_note = get_highest_note(active_notes);
+
+      if (new_note != current_note) {
+        duration = last_time - current_time;
+        if (duration > 0) {
+          int duration_ms = get_duration_ms(duration);
+          if (current_note != -1) {
+            int freq = get_midi_freq(current_note);
+            printf("{%d, %d},\n", freq, duration_ms);
+          }
+          else {
+            // rest
+            printf("{%d, %d},\n", 0, duration_ms);
+          }
+        }
+        last_time = current_time;
+        current_note = new_note;
+      }
       break;
 
+    case MIDI_PARSER_EOB:
+      duration = last_time - current_time;
+      if (duration > 0) {
+        int duration_ms = get_duration_ms(duration);
+        if (current_note != -1) {
+          int freq = get_midi_freq(current_note);
+          printf("{%d, %d},\n", freq, duration_ms);
+        }
+      }
+      return;
+
+
     case MIDI_PARSER_TRACK_META:
+      if (parser->meta.type == MIDI_META_SET_TEMPO) {
+        tempo =
+            (parser->meta.bytes[0] << 16) |
+            (parser->meta.bytes[1] << 8)  |
+            (parser->meta.bytes[2]);
+      }
       break;
 
     case MIDI_PARSER_TRACK_SYSEX:
@@ -76,35 +151,6 @@ static int parse_file(const char *path)
     return 1;
   }
 
-#ifdef _WIN32
-
-  HANDLE fhandle = (HANDLE)_get_osfhandle(fd);
-
-  if (st.st_size == 0) {
-    printf("file is empty\n");
-    close(fd);
-    return 1;
-  }
-
-  HANDLE hMapFile = CreateFileMapping(fhandle, NULL, PAGE_READONLY, 0, 0, NULL);
-
-  if (!hMapFile) {
-    win_err_helper("CreateFileMapping", path);
-    close(fd);
-    return 1;
-  }
-
-  void *mem = MapViewOfFile(hMapFile, FILE_MAP_READ, 0, 0, 0);
-
-  if (!mem) {
-    win_err_helper("MapViewOfFile", path);
-    CloseHandle(hMapFile);
-    close(fd);
-    return 1;
-  }
-
-#else
-
   void *mem = mmap(NULL, st.st_size, PROT_READ, MAP_SHARED, fd, 0);
   if (mem == MAP_FAILED) {
     printf("mmap(%s): %m\n", path);
@@ -112,21 +158,14 @@ static int parse_file(const char *path)
     return 1;
   }
 
-#endif
-
   struct midi_parser parser;
   parser.state = MIDI_PARSER_INIT;
   parser.size  = st.st_size;
   parser.in    = mem;
 
   parse_and_dump(&parser);
-
-#ifdef _WIN32
-  UnmapViewOfFile(mem);
-  CloseHandle(hMapFile);
-#else
   munmap(mem, st.st_size);
-#endif
+
   close(fd);
   return 0;
 }
