@@ -7,5 +7,7 @@ add_library(midi-parser src/midi-parser.c)
 set_property(TARGET midi-parser PROPERTY C_STANDARD 99)
 
 add_executable(midi-dump example/midi-dump.c)
+add_executable(note-dump example/note-dump.c)
 set_property(TARGET midi-dump PROPERTY C_STANDARD 99)
 target_link_libraries(midi-dump midi-parser)
+target_link_libraries(note-dump midi-parser)
